@@ -34,18 +34,18 @@ macro_rules! bits {
 // ------------------------------------------------------------------------------
 
 #[derive(Clone)]
-pub struct Region {
+struct Region {
   cells: u128,
 }
 
 #[derive(Clone)]
-pub struct Given {
+struct Given {
   cell: u32,
   value: u32,
 }
 
 #[derive(Clone)]
-pub struct Cage {
+struct Cage {
   cells: u128,
   sum: u32,
 }
