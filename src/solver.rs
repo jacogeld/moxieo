@@ -51,6 +51,34 @@ struct Cage {
 }
 
 // ------------------------------------------------------------------------------
+// State of the solver
+// ------------------------------------------------------------------------------
+
+struct State {
+  candidates: [u32; 81],
+  updated: bool,
+}
+
+impl State {
+
+  fn new(solver: &Solver) -> State {
+    let mut candidates: [u32; 81] = [0; 81];
+    for given in &solver.givens {
+      let cell = given.cell as usize;
+      let value = given.value;
+      assert!(cell < 81);
+      assert!(value >= 1 && value <= 9);
+      candidates[cell] = 1 << (value - 1);
+    }
+    State {
+      candidates,
+      updated: false,
+    }
+  }
+
+}
+
+// ------------------------------------------------------------------------------
 // Solver
 // ------------------------------------------------------------------------------
 
