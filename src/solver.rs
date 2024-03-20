@@ -1,3 +1,5 @@
+use std::fmt;
+
 use log::*;
 
 // ------------------------------------------------------------------------------
@@ -51,30 +53,115 @@ struct Cage {
 }
 
 // ------------------------------------------------------------------------------
+// Answer returned by the solver
+// ------------------------------------------------------------------------------
+
+pub enum Answer<S, T, E> {
+  Single(S),
+  Multiple(T),
+  Err(E),
+}
+
+// ------------------------------------------------------------------------------
+// Collection of counters for describing the steps of the solution.
+// ------------------------------------------------------------------------------
+
+struct Stats {
+  count_naked_singles: u32,
+}
+
+impl Stats {
+
+  fn new() -> Stats {
+    Stats {
+      count_naked_singles: 0,
+    }
+  }
+
+}
+
+// ------------------------------------------------------------------------------
 // State of the solver
 // ------------------------------------------------------------------------------
 
-struct State {
+pub struct State {
   candidates: [u32; 81],
+  solution: [u32; 81],
+  unassigned_count: u32,
   updated: bool,
+  is_viable: bool,
+  stats: Stats,
 }
 
 impl State {
 
   fn new(solver: &Solver) -> State {
-    let mut candidates: [u32; 81] = [0; 81];
+    let mut state = State {
+      candidates: [(1 << 9) - 1; 81],
+      solution: [0; 81],
+      unassigned_count: 81,
+      updated: false,
+      is_viable: true,
+      stats: Stats::new(),
+    };
     for given in &solver.givens {
       let cell = given.cell as usize;
       let value = given.value;
       assert!(cell < 81);
       assert!(value >= 1 && value <= 9);
-      candidates[cell] = 1 << (value - 1);
+      state.set_solution(cell, value);
     }
-    State {
-      candidates,
-      updated: false,
+    state
+  }
+
+  fn is_viable(&self) -> bool { self.is_viable }
+
+  fn is_solved(&self) -> bool { self.unassigned_count == 0 }
+
+  fn set_solution(&mut self, cell: usize, value: u32) {
+    self.candidates[cell] = 0;
+    self.solution[cell] = value;
+    self.unassigned_count -= 1;
+    self.updated = true;
+  }
+
+  fn naked_singles(&mut self) -> bool {
+    let mut changed = false;
+    for r in 0..9 {
+      for c in 0..9 {
+        let a = r * 9 + c;
+        for v in 1..10 {
+          if self.candidates[a] == 1 << (v - 1) {
+            self.set_solution(a, v);
+            self.stats.count_naked_singles += 1;
+            debug!("({},{}) = {}", r + 1, c + 1, v);
+            changed = true;
+          }
+        }
+      }
+    }
+    changed
+  }
+
+  fn solve(&mut self) {
+    self.updated = true;
+    while self.updated && self.is_viable {
+      self.updated = false;
+      self.naked_singles();
     }
   }
+
+}
+
+impl fmt::Display for State {
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      let strrep = self.candidates
+        .iter()
+        .map(|x| if *x == 0 { '*' } else { char::from_u32(x + 48).unwrap() })
+        .collect::<String>();
+      write!(f, "{}", strrep)
+    }
 
 }
 
@@ -83,7 +170,7 @@ impl State {
 // ------------------------------------------------------------------------------
 
 pub struct Solver {
-  name: String,
+  name: String, // TODO: Remove the name field
   regions: Vec<Region>,
   givens: Vec<Given>,
   cages: Vec<Cage>,
@@ -91,16 +178,19 @@ pub struct Solver {
 
 impl Solver {
 
-  pub fn solve(&self) {
+  pub fn solve(&self) -> Answer<State, State, String> {
     let start_time = std::time::Instant::now();
-    println!("Hello, world!2");
-    trace!("trace message");
-    debug!("debug message");
-    info!("info message");
-    warn!("warn message");
-    error!("error message");
+    let mut state = State::new(self);
+    state.solve();
     info!("name: {}", self.name);
     info!("solve time: {:.2}", start_time.elapsed().as_millis());
+    if !state.is_viable() {
+      Answer::Err(String::from("no solution"))
+    } else if state.is_solved() {
+      Answer::Single(state)
+    } else {
+      Answer::Multiple(state)
+    }
   }
   
 }

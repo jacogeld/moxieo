@@ -10,6 +10,10 @@ fn main() {
     .add_column_regions()
     .given(decode!("A1"), 2)
     .build();
-  println!("Hello, world!");
-  solver.solve();
+  let response = solver.solve();
+  match response {
+    Answer::Err(_) => println!("No solution"),
+    Answer::Multiple(_) => println!("Multiple solutions"),
+    Answer::Single(solution) => println!("Solution: {}", solution),
+  }
 }
