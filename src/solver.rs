@@ -32,6 +32,20 @@ macro_rules! bits {
 }
 
 // ------------------------------------------------------------------------------
+// Macro to collect bits
+// ------------------------------------------------------------------------------
+
+macro_rules! decode_to_bits {
+  ($($args:expr),*) => {{
+      let result : u128 = 0;
+      $(
+          let result = result | (1 << decode!($args));
+      )*
+      result
+  }}
+}
+
+// ------------------------------------------------------------------------------
 // Constraints
 // ------------------------------------------------------------------------------
 
@@ -238,17 +252,7 @@ impl SolverBuilder {
   }
 
   pub fn add_row_regions(&mut self) -> &mut Self {
-    let mut row = bits!(
-      decode!("A1"),
-      decode!("A2"),
-      decode!("A3"),
-      decode!("A4"),
-      decode!("A5"),
-      decode!("A6"),
-      decode!("A7"),
-      decode!("A8"),
-      decode!("A9")
-    );
+    let mut row = decode_to_bits!("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9");
     for _ in 0..9 {
       self.regions.push(Region { cells: row });
       row = row << 9;
@@ -257,21 +261,31 @@ impl SolverBuilder {
   }
 
   pub fn add_column_regions(&mut self) -> &mut Self {
-    let mut col = bits!(
-      decode!("A1"),
-      decode!("B1"),
-      decode!("C1"),
-      decode!("D1"),
-      decode!("E1"),
-      decode!("F1"),
-      decode!("G1"),
-      decode!("H1"),
-      decode!("I1")
-    );
+    let mut col = decode_to_bits!("A1", "B1", "C1", "D1", "E1", "F1", "G1", "H1", "I1");
     for _ in 0..9 {
       self.regions.push(Region { cells: col });
       col = col << 1;
     }
+    self
+  }
+
+  pub fn add_box_regions(&mut self) -> &mut Self {
+    self.regions.push(Region { cells: decode_to_bits!("A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "C3") });
+    self.regions.push(Region { cells: decode_to_bits!("D1", "D2", "D3", "E1", "E2", "E3", "F1", "F2", "F3") });
+    self.regions.push(Region { cells: decode_to_bits!("G1", "G2", "G3", "H1", "H2", "H3", "I1", "I2", "I3") });
+    self.regions.push(Region { cells: decode_to_bits!("A4", "A5", "A6", "B4", "B5", "B6", "C4", "C5", "C6") });
+    self.regions.push(Region { cells: decode_to_bits!("D4", "D5", "D6", "E4", "E5", "E6", "F4", "F5", "F6") });
+    self.regions.push(Region { cells: decode_to_bits!("G4", "G5", "G6", "H4", "H5", "H6", "I4", "I5", "I6") });
+    self.regions.push(Region { cells: decode_to_bits!("A7", "A8", "A9", "B7", "B8", "B9", "C7", "C8", "C9") });
+    self.regions.push(Region { cells: decode_to_bits!("D7", "D8", "D9", "E7", "E8", "E9", "F7", "F8", "F9") });
+    self.regions.push(Region { cells: decode_to_bits!("G7", "G8", "G9", "H7", "H8", "H9", "I7", "I8", "I9") });
+    self
+  }
+
+  pub fn add_regular_regions(&mut self) -> &mut Self {
+    self.add_row_regions();
+    self.add_column_regions();
+    self.add_box_regions();
     self
   }
 
