@@ -3,6 +3,13 @@ use std::fmt;
 use log::*;
 
 // ------------------------------------------------------------------------------
+// Type aliases
+// ------------------------------------------------------------------------------
+
+type Address = u32;
+type AddressBitset = u128;
+
+// ------------------------------------------------------------------------------
 // Macro to decode coordinates
 // ------------------------------------------------------------------------------
 
@@ -23,7 +30,7 @@ macro_rules! decode {
 
 macro_rules! bits {
   ($($args:expr),*) => {{
-      let result : u128 = 0;
+      let result : AddressBitset = 0;
       $(
           let result = result | (1 << $args);
       )*
@@ -37,7 +44,7 @@ macro_rules! bits {
 
 macro_rules! decode_to_bits {
   ($($args:expr),*) => {{
-      let result : u128 = 0;
+      let result : AddressBitset = 0;
       $(
           let result = result | (1 << decode!($args));
       )*
@@ -51,18 +58,18 @@ macro_rules! decode_to_bits {
 
 #[derive(Clone)]
 struct Region {
-  cells: u128,
+  cells: AddressBitset,
 }
 
 #[derive(Clone)]
 struct Given {
-  cell: u32,
+  cell: Address,
   value: u32,
 }
 
 #[derive(Clone)]
 struct Cage {
-  cells: u128,
+  cells: AddressBitset,
   sum: u32,
 }
 
@@ -98,16 +105,17 @@ impl Stats {
 // State of the solver
 // ------------------------------------------------------------------------------
 
-pub struct State {
+pub struct State<'a> {
   candidates: [u32; 81],
   solution: [u32; 81],
   unassigned_count: u32,
   updated: bool,
   is_viable: bool,
   stats: Stats,
+  solver: &'a Solver,
 }
 
-impl State {
+impl State<'_> {
 
   fn new(solver: &Solver) -> State {
     let mut state = State {
@@ -117,6 +125,7 @@ impl State {
       updated: false,
       is_viable: true,
       stats: Stats::new(),
+      solver: solver,
     };
     for given in &solver.givens {
       let cell = given.cell as usize;
@@ -137,6 +146,9 @@ impl State {
     self.solution[cell] = value;
     self.unassigned_count -= 1;
     self.updated = true;
+    // for region in self.solver.regions {
+    //   if region & (1 << cell)
+    // }
   }
 
   fn naked_singles(&mut self) -> bool {
@@ -167,7 +179,7 @@ impl State {
 
 }
 
-impl fmt::Display for State {
+impl fmt::Display for State<'_> {
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
       let strrep = self.candidates
@@ -236,17 +248,17 @@ impl SolverBuilder {
     self
   }
 
-  pub fn region(&mut self, cells: u128) -> &mut Self {
+  pub fn region(&mut self, cells: AddressBitset) -> &mut Self {
     self.regions.push(Region { cells });
     self
   }
 
-  pub fn given(&mut self, cell: u32, value: u32) -> &mut Self {
+  pub fn given(&mut self, cell: Address, value: u32) -> &mut Self {
     self.givens.push(Given { cell, value });
     self
   }
 
-  pub fn cage(&mut self, cells: u128, sum: u32) -> &mut Self {
+  pub fn cage(&mut self, cells: AddressBitset, sum: u32) -> &mut Self {
     self.cages.push(Cage { cells, sum });
     self
   }
