@@ -3,13 +3,6 @@ use std::fmt;
 use log::*;
 
 // ------------------------------------------------------------------------------
-// Type aliases
-// ------------------------------------------------------------------------------
-
-type Address = u32;
-type AddressBitset = u128;
-
-// ------------------------------------------------------------------------------
 // Macro to decode coordinates
 // ------------------------------------------------------------------------------
 
@@ -30,7 +23,7 @@ macro_rules! decode {
 
 macro_rules! bits {
   ($($args:expr),*) => {{
-      let result : AddressBitset = 0;
+      let result : u128 = 0;
       $(
           let result = result | (1 << $args);
       )*
@@ -44,7 +37,7 @@ macro_rules! bits {
 
 macro_rules! decode_to_bits {
   ($($args:expr),*) => {{
-      let result : AddressBitset = 0;
+      let result : u128 = 0;
       $(
           let result = result | (1 << decode!($args));
       )*
@@ -58,18 +51,19 @@ macro_rules! decode_to_bits {
 
 #[derive(Clone)]
 struct Region {
-  cells: AddressBitset,
+  cells_bitset: u128,
+  cells: Vec<u32>,
 }
 
 #[derive(Clone)]
 struct Given {
-  cell: Address,
+  cell: u32,
   value: u32,
 }
 
 #[derive(Clone)]
 struct Cage {
-  cells: AddressBitset,
+  cells: u128,
   sum: u32,
 }
 
@@ -146,14 +140,25 @@ impl State<'_> {
     self.solution[cell] = value;
     self.unassigned_count -= 1;
     self.updated = true;
-    // for region in self.solver.regions {
-    //   if region & (1 << cell)
-    // }
+    let value_mask = !(1 << (value - 1));
+    'outer: for region in &self.solver.regions_for[cell] {
+      // debug!("region (cell=={}, value=={}) {:?}", cell, value, region.cells);
+      for neighbor in &region.cells {
+        let index = *neighbor as usize;
+        if cell == index { continue; }
+        if self.solution[index] != 0 { continue; }
+        self.candidates[index] &= value_mask;
+        if self.candidates[index] == 0 {
+          self.is_viable = false;
+          break 'outer;
+        }
+      }
+    }
   }
 
   fn naked_singles(&mut self) -> bool {
     let mut changed = false;
-    for r in 0..9 {
+    'outer: for r in 0..9 {
       for c in 0..9 {
         let a = r * 9 + c;
         for v in 1..10 {
@@ -162,6 +167,7 @@ impl State<'_> {
             self.stats.count_naked_singles += 1;
             debug!("({},{}) = {}", r + 1, c + 1, v);
             changed = true;
+            if !self.is_viable { break 'outer; }
           }
         }
       }
@@ -182,11 +188,52 @@ impl State<'_> {
 impl fmt::Display for State<'_> {
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-      let strrep = self.candidates
+      let strrep = self.solution
         .iter()
         .map(|x| if *x == 0 { '*' } else { char::from_u32(x + 48).unwrap() })
         .collect::<String>();
       write!(f, "{}", strrep)
+    }
+
+}
+
+impl fmt::Debug for State<'_> {
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      let mut strrep = [[' '; 55]; 37];
+      for r in 0..37 {
+        for c in 0..55 {
+          let n = (if r % 12 == 0 { 2 } else if r % 4 == 0 { 1 } else { 0 })
+            + (if c % 18 == 0 { 6 } else if c % 6 == 0 { 3 } else { 0 });
+          strrep[r][c] = match n {
+            0 => ' ', 1 => '-', 2 => '=',
+            3 => ':', 6 => '|', _ => '+',
+          };
+        }
+      }
+      for r in 0..9 {
+        let ry = r * 4 + 1;
+        for c in 0..9 {
+          let a = r * 9 + c;
+          let cx = c * 6 + 1;
+          if self.solution[a] != 0 { strrep[ry][cx] = char::from_u32(self.solution[a] + 48).unwrap(); }
+          if self.candidates[a] & 1 << 0 != 0 { strrep[ry + 0][cx + 2] = '1'; }
+          if self.candidates[a] & 1 << 1 != 0 { strrep[ry + 0][cx + 3] = '2'; }
+          if self.candidates[a] & 1 << 2 != 0 { strrep[ry + 0][cx + 4] = '3'; }
+          if self.candidates[a] & 1 << 3 != 0 { strrep[ry + 1][cx + 2] = '4'; }
+          if self.candidates[a] & 1 << 4 != 0 { strrep[ry + 1][cx + 3] = '5'; }
+          if self.candidates[a] & 1 << 5 != 0 { strrep[ry + 1][cx + 4] = '6'; }
+          if self.candidates[a] & 1 << 6 != 0 { strrep[ry + 2][cx + 2] = '7'; }
+          if self.candidates[a] & 1 << 7 != 0 { strrep[ry + 2][cx + 3] = '8'; }
+          if self.candidates[a] & 1 << 8 != 0 { strrep[ry + 2][cx + 4] = '9'; }
+        }
+      }
+      let str = strrep
+        .iter()
+        .map(|q| q.iter().collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
+      writeln!(f, "\n{}", str)
     }
 
 }
@@ -198,6 +245,7 @@ impl fmt::Display for State<'_> {
 pub struct Solver {
   name: String, // TODO: Remove the name field
   regions: Vec<Region>,
+  regions_for: [Vec<Region>; 81],
   givens: Vec<Given>,
   cages: Vec<Cage>,
 }
@@ -207,6 +255,7 @@ impl Solver {
   pub fn solve(&self) -> Answer<State, State, String> {
     let start_time = std::time::Instant::now();
     let mut state = State::new(self);
+    info!("{:?}", state);
     state.solve();
     info!("name: {}", self.name);
     info!("solve time: {:.2}", start_time.elapsed().as_millis());
@@ -248,17 +297,51 @@ impl SolverBuilder {
     self
   }
 
-  pub fn region(&mut self, cells: AddressBitset) -> &mut Self {
-    self.regions.push(Region { cells });
+  pub fn region(&mut self, cells: Vec<u32>) -> &mut Self {
+    let mut cells_bitset = 0u128;
+    for cell in 0..81 {
+      if cells.contains(&cell) {
+        cells_bitset |= 1 << cell;
+      }
+    }
+    self.regions.push(Region { cells_bitset, cells });
     self
   }
 
-  pub fn given(&mut self, cell: Address, value: u32) -> &mut Self {
+  pub fn region_bitset(&mut self, cells_bitset: u128) -> &mut Self {
+    let mut cells: Vec<u32> = Vec::new();
+    for cell in 0..81 {
+      if cells_bitset & 1 << cell != 0 {
+        cells.push(cell);
+      }
+    }
+    self.regions.push(Region { cells_bitset, cells });
+    self
+  }
+
+  pub fn given(&mut self, cell: u32, value: u32) -> &mut Self {
     self.givens.push(Given { cell, value });
     self
   }
 
-  pub fn cage(&mut self, cells: AddressBitset, sum: u32) -> &mut Self {
+  pub fn givens(&mut self, values: String) -> &mut Self {
+    let mut r = 0;
+    let mut c = 0;
+    for value in values.into_bytes() {
+      match value {
+        b'*' => c += 1,
+        b'1'..=b'9' => { self.given(r * 9 + c, (value - b'0').into()); c += 1 },
+        _ => ()
+      }
+      if c == 9 {
+        c = 0;
+        r += 1;
+      }
+    }
+    self
+  }
+
+  pub fn cage(&mut self, cells: u128, sum: u32) -> &mut Self {
     self.cages.push(Cage { cells, sum });
     self
   }
@@ -266,7 +349,7 @@ impl SolverBuilder {
   pub fn add_row_regions(&mut self) -> &mut Self {
     let mut row = decode_to_bits!("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9");
     for _ in 0..9 {
-      self.regions.push(Region { cells: row });
+      self.region_bitset(row);
       row = row << 9;
     }
     self
@@ -275,22 +358,22 @@ impl SolverBuilder {
   pub fn add_column_regions(&mut self) -> &mut Self {
     let mut col = decode_to_bits!("A1", "B1", "C1", "D1", "E1", "F1", "G1", "H1", "I1");
     for _ in 0..9 {
-      self.regions.push(Region { cells: col });
+      self.region_bitset(col);
       col = col << 1;
     }
     self
   }
 
   pub fn add_box_regions(&mut self) -> &mut Self {
-    self.regions.push(Region { cells: decode_to_bits!("A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "C3") });
-    self.regions.push(Region { cells: decode_to_bits!("D1", "D2", "D3", "E1", "E2", "E3", "F1", "F2", "F3") });
-    self.regions.push(Region { cells: decode_to_bits!("G1", "G2", "G3", "H1", "H2", "H3", "I1", "I2", "I3") });
-    self.regions.push(Region { cells: decode_to_bits!("A4", "A5", "A6", "B4", "B5", "B6", "C4", "C5", "C6") });
-    self.regions.push(Region { cells: decode_to_bits!("D4", "D5", "D6", "E4", "E5", "E6", "F4", "F5", "F6") });
-    self.regions.push(Region { cells: decode_to_bits!("G4", "G5", "G6", "H4", "H5", "H6", "I4", "I5", "I6") });
-    self.regions.push(Region { cells: decode_to_bits!("A7", "A8", "A9", "B7", "B8", "B9", "C7", "C8", "C9") });
-    self.regions.push(Region { cells: decode_to_bits!("D7", "D8", "D9", "E7", "E8", "E9", "F7", "F8", "F9") });
-    self.regions.push(Region { cells: decode_to_bits!("G7", "G8", "G9", "H7", "H8", "H9", "I7", "I8", "I9") });
+    self.region_bitset(decode_to_bits!("A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "C3"));
+    self.region_bitset(decode_to_bits!("D1", "D2", "D3", "E1", "E2", "E3", "F1", "F2", "F3"));
+    self.region_bitset(decode_to_bits!("G1", "G2", "G3", "H1", "H2", "H3", "I1", "I2", "I3"));
+    self.region_bitset(decode_to_bits!("A4", "A5", "A6", "B4", "B5", "B6", "C4", "C5", "C6"));
+    self.region_bitset(decode_to_bits!("D4", "D5", "D6", "E4", "E5", "E6", "F4", "F5", "F6"));
+    self.region_bitset(decode_to_bits!("G4", "G5", "G6", "H4", "H5", "H6", "I4", "I5", "I6"));
+    self.region_bitset(decode_to_bits!("A7", "A8", "A9", "B7", "B8", "B9", "C7", "C8", "C9"));
+    self.region_bitset(decode_to_bits!("D7", "D8", "D9", "E7", "E8", "E9", "F7", "F8", "F9"));
+    self.region_bitset(decode_to_bits!("G7", "G8", "G9", "H7", "H8", "H9", "I7", "I8", "I9"));
     self
   }
 
@@ -302,12 +385,51 @@ impl SolverBuilder {
   }
 
   pub fn build(&mut self) -> Solver {
+    let mut regions_for: [Vec<Region>; 81] = std::array::from_fn(|_| Vec::new());
+    for cell in 0..81 {
+      for region in &self.regions {
+        if region.cells_bitset & (1 << cell) != 0 {
+          regions_for[cell].push(region.clone());
+        }
+      }
+    }
     Solver {
       name: self.name.clone(),
       regions: self.regions.clone(),
+      regions_for,
       givens: self.givens.clone(),
       cages: self.cages.clone(),
     }
   }
 
+}
+
+// ------------------------------------------------------------------------------
+// Tests
+// ------------------------------------------------------------------------------
+
+#[test]
+fn check_one_naked_single() {
+  let solver = SolverBuilder::default()
+    .add_regular_regions()
+    .givens("*12345678".to_owned())
+    .build();
+  if let Answer::Multiple(state) = solver.solve() {
+    assert_eq!(1, state.stats.count_naked_singles);
+  } else {
+    assert!(false);
+  }
+}
+
+#[test]
+fn check_naked_singles() {
+  let solver = SolverBuilder::default()
+    .add_regular_regions()
+    .givens("3********|*4135268*|*2918437*|*7354689*|*9287351*|*8621974*|*6479513*|*1543826*|*********".to_owned())
+    .build();
+  if let Answer::Single(state) = solver.solve() {
+    assert_eq!(31, state.stats.count_naked_singles);
+  } else {
+    assert!(false);
+  }
 }
