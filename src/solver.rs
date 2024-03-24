@@ -83,6 +83,9 @@ pub enum Answer<S, T, E> {
 
 struct Stats {
   count_naked_singles: u32,
+  count_unique_in_region: u32,
+  count_naked_pairs: u32,
+  count_naked_triples: u32,
 }
 
 impl Stats {
@@ -90,6 +93,9 @@ impl Stats {
   fn new() -> Stats {
     Stats {
       count_naked_singles: 0,
+      count_unique_in_region: 0,
+      count_naked_pairs: 0,
+      count_naked_triples: 0,
     }
   }
 
@@ -142,7 +148,6 @@ impl State<'_> {
     self.updated = true;
     let value_mask = !(1 << (value - 1));
     'outer: for region in &self.solver.regions_for[cell] {
-      // debug!("region (cell=={}, value=={}) {:?}", cell, value, region.cells);
       for neighbor in &region.cells {
         let index = *neighbor as usize;
         if cell == index { continue; }
@@ -165,9 +170,136 @@ impl State<'_> {
           if self.candidates[a] == 1 << (v - 1) {
             self.set_solution(a, v);
             self.stats.count_naked_singles += 1;
-            debug!("({},{}) = {}", r + 1, c + 1, v);
+            debug!("naked_singles ({},{}) = {}", r + 1, c + 1, v);
             changed = true;
             if !self.is_viable { break 'outer; }
+          }
+        }
+      }
+    }
+    changed
+  }
+
+  fn unique_in_region(&mut self) -> bool {
+    let mut changed: bool = false;
+    'outer: for region in &self.solver.regions {
+      for v in 1..10 {
+        let mut count = 0;
+        let mut last = 0u32;
+        for neighbor in &region.cells {
+          if self.candidates[*neighbor as usize] & 1 << (v - 1) != 0 {
+            count += 1;
+            if count > 1 { break; }
+            last = *neighbor;
+          }
+        }
+        if count == 1 {
+          self.set_solution(last as usize, v);
+          self.stats.count_unique_in_region += 1;
+          debug!("unique_in_region ({},{}) = {}", last / 9 + 1, last % 9 + 1, v);
+          changed = true;
+          if !self.is_viable { break 'outer; }
+        }
+      }
+    }
+    changed
+  }
+
+  fn naked_pairs(&mut self) -> bool {
+    let mut changed: bool = false;
+    for region in &self.solver.regions {
+      let mut present = 0;
+      let mut count = 0;
+      for neighbor in &region.cells {
+        let index = *neighbor as usize;
+        if self.solution[index] == 0 {
+          count += 1;
+        } else {
+          present |= 1 << (self.solution[index] - 1);
+        }
+      }
+      if count <= 2 { continue; }
+      for v in 1..9 {
+        if present & 1 << (v - 1) != 0 { continue; }
+        for w in (v + 1)..10 {
+          if present & 1 << (w - 1) != 0 { continue; }
+          let pair = 1 << (v - 1) | 1 << (w - 1);
+          let mut vwcount = 0;
+          for neighbor in &region.cells {
+            let index = *neighbor as usize;
+            if self.candidates[index] & pair != 0 {
+              vwcount += 1;
+              if vwcount > 2 { break; }
+            }
+          }
+          if vwcount == 2 {
+            let mut updated = false;
+            for neighbor in &region.cells {
+              let index = *neighbor as usize;
+              if self.candidates[index] & pair != 0 {
+                let old_candidates = self.candidates[index];
+                self.candidates[index] &= pair;
+                if old_candidates != self.candidates[index] { updated = true; }
+              }
+            }
+            if updated {
+              self.stats.count_naked_pairs += 1;
+              debug!("naked_pairs [{}, {}] in region {:?}", v, w, region.cells);
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+    changed
+  }
+
+  fn naked_triples(&mut self) -> bool {
+    debug!("{:?}", self);
+    let mut changed: bool = false;
+    for region in &self.solver.regions {
+      let mut present = 0;
+      let mut count = 0;
+      for neighbor in &region.cells {
+        let index = *neighbor as usize;
+        if self.solution[index] == 0 {
+          count += 1;
+        } else {
+          present |= 1 << (self.solution[index] - 1);
+        }
+      }
+      if count <= 2 { continue; }
+      for v in 1..8 {
+        if present & 1 << (v - 1) != 0 { continue; }
+        for w in (v + 1)..9 {
+          if present & 1 << (w - 1) != 0 { continue; }
+          for q in (w + 1)..10 {
+            if present & 1 << (q - 1) != 0 { continue; }
+            let triple = 1 << (v - 1) | 1 << (w - 1) | 1 << (q - 1);
+            let mut vwqcount = 0;
+            for neighbor in &region.cells {
+              let index = *neighbor as usize;
+              if self.candidates[index] & triple != 0 {
+                vwqcount += 1;
+                if vwqcount > 3 { break; }
+              }
+            }
+            if vwqcount == 3 {
+              let mut updated = false;
+              for neighbor in &region.cells {
+                let index = *neighbor as usize;
+                if self.candidates[index] & triple != 0 {
+                  let old_candidates = self.candidates[index];
+                  self.candidates[index] &= triple;
+                  if old_candidates != self.candidates[index] { updated = true; }
+                }
+              }
+              if updated {
+                self.stats.count_naked_triples += 1;
+                debug!("naked_triples [{}, {}, {}] in region {:?}", v, w, q, region.cells);
+                changed = true;
+              }
+            }
           }
         }
       }
@@ -178,9 +310,15 @@ impl State<'_> {
   fn solve(&mut self) {
     self.updated = true;
     while self.updated && self.is_viable {
-      self.updated = false;
-      self.naked_singles();
+      self.updated = self.naked_singles()
+       || self.unique_in_region()
+       || self.naked_pairs()
+       || self.naked_triples();
     }
+    debug!("#naked_singles {}", self.stats.count_naked_singles);
+    debug!("#unique_in_region {}", self.stats.count_unique_in_region);
+    debug!("#naked_pairs {}", self.stats.count_naked_pairs);
+    debug!("#naked_triples {}", self.stats.count_naked_triples);
   }
 
 }
@@ -257,6 +395,7 @@ impl Solver {
     let mut state = State::new(self);
     info!("{:?}", state);
     state.solve();
+    info!("{:?}", state);
     info!("name: {}", self.name);
     info!("solve time: {:.2}", start_time.elapsed().as_millis());
     if !state.is_viable() {
@@ -325,17 +464,12 @@ impl SolverBuilder {
   }
 
   pub fn givens(&mut self, values: String) -> &mut Self {
-    let mut r = 0;
-    let mut c = 0;
+    let mut cell = 0;
     for value in values.into_bytes() {
       match value {
-        b'*' => c += 1,
-        b'1'..=b'9' => { self.given(r * 9 + c, (value - b'0').into()); c += 1 },
+        b'*' => cell += 1,
+        b'1'..=b'9' => { self.given(cell, (value - b'0').into()); cell += 1 },
         _ => ()
-      }
-      if c == 9 {
-        c = 0;
-        r += 1;
       }
     }
     self
