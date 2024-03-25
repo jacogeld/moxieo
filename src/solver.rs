@@ -21,15 +21,15 @@ macro_rules! decode {
 // Macro to collect bits
 // ------------------------------------------------------------------------------
 
-macro_rules! bits {
-  ($($args:expr),*) => {{
-      let result : u128 = 0;
-      $(
-          let result = result | (1 << $args);
-      )*
-      result
-  }}
-}
+// macro_rules! bits {
+//   ($($args:expr),*) => {{
+//       let result : u128 = 0;
+//       $(
+//           let result = result | (1 << $args);
+//       )*
+//       result
+//   }}
+// }
 
 // ------------------------------------------------------------------------------
 // Macro to collect bits
@@ -51,6 +51,7 @@ macro_rules! decode_to_bits {
 
 #[derive(Clone)]
 struct Region {
+  name: Option<String>,
   cells_bitset: u128,
   cells: Vec<u32>,
 }
@@ -65,6 +66,18 @@ struct Given {
 struct Cage {
   cells: u128,
   sum: u32,
+}
+
+impl fmt::Debug for Region {
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      if self.name.is_none() {
+        write!(f, "{:?}", self.cells)
+      } else {
+        write!(f, "{}", self.name.as_ref().unwrap())
+      }
+    }
+
 }
 
 // ------------------------------------------------------------------------------
@@ -86,6 +99,7 @@ struct Stats {
   count_unique_in_region: u32,
   count_naked_pairs: u32,
   count_naked_triples: u32,
+  count_intersection_removal: u32,
 }
 
 impl Stats {
@@ -96,6 +110,7 @@ impl Stats {
       count_unique_in_region: 0,
       count_naked_pairs: 0,
       count_naked_triples: 0,
+      count_intersection_removal: 0,
     }
   }
 
@@ -196,7 +211,7 @@ impl State<'_> {
         if count == 1 {
           self.set_solution(last as usize, v);
           self.stats.count_unique_in_region += 1;
-          debug!("unique_in_region ({},{}) = {}", last / 9 + 1, last % 9 + 1, v);
+          debug!("unique_in_region ({},{}) = {} in {:?}", last / 9 + 1, last % 9 + 1, v, region);
           changed = true;
           if !self.is_viable { break 'outer; }
         }
@@ -244,7 +259,7 @@ impl State<'_> {
             }
             if updated {
               self.stats.count_naked_pairs += 1;
-              debug!("naked_pairs [{}, {}] in region {:?}", v, w, region.cells);
+              debug!("naked_pairs [{}, {}] in {:?}", v, w, region);
               changed = true;
             }
           }
@@ -255,7 +270,6 @@ impl State<'_> {
   }
 
   fn naked_triples(&mut self) -> bool {
-    debug!("{:?}", self);
     let mut changed: bool = false;
     for region in &self.solver.regions {
       let mut present = 0;
@@ -268,7 +282,7 @@ impl State<'_> {
           present |= 1 << (self.solution[index] - 1);
         }
       }
-      if count <= 2 { continue; }
+      if count <= 3 { continue; }
       for v in 1..8 {
         if present & 1 << (v - 1) != 0 { continue; }
         for w in (v + 1)..9 {
@@ -296,7 +310,53 @@ impl State<'_> {
               }
               if updated {
                 self.stats.count_naked_triples += 1;
-                debug!("naked_triples [{}, {}, {}] in region {:?}", v, w, q, region.cells);
+                debug!("naked_triples [{}, {}, {}] in {:?}", v, w, q, region);
+                changed = true;
+              }
+            }
+          }
+        }
+      }
+    }
+    changed
+  }
+
+  fn intersection_removal(&mut self) -> bool {
+    let mut changed: bool = false;
+    for region in &self.solver.regions {
+      for v in 1..10 {
+        let vbitset = 1 << (v - 1);
+        let mut positions = 0u128;
+        for cell in &region.cells {
+          let index = *cell as usize;
+          if self.candidates[index] & vbitset != 0 {
+            positions |= 1 << index;
+          }
+        }
+        if positions != 0 {
+          for intersection in &self.solver.region_intersections {
+            let (r1, r2, i) = intersection;
+            if i & positions == positions {
+              let mut updated = false;
+              for cell in &r1.cells {
+                let index = *cell as usize;
+                if positions & 1 << index == 0 {
+                  let old_candidates = self.candidates[index];
+                  self.candidates[index] &= !vbitset;
+                  if old_candidates != self.candidates[index] { updated = true; }
+                }
+              }
+              for cell in &r2.cells {
+                let index = *cell as usize;
+                if positions & 1 << index == 0 {
+                  let old_candidates = self.candidates[index];
+                  self.candidates[index] &= !vbitset;
+                  if old_candidates != self.candidates[index] { updated = true; }
+                }
+              }
+              if updated {
+                self.stats.count_intersection_removal += 1;
+                debug!("intersection_removal {} from {:?} and {:?}", v, r1, r2);
                 changed = true;
               }
             }
@@ -313,12 +373,14 @@ impl State<'_> {
       self.updated = self.naked_singles()
        || self.unique_in_region()
        || self.naked_pairs()
-       || self.naked_triples();
+       || self.naked_triples()
+       || self.intersection_removal();
     }
     debug!("#naked_singles {}", self.stats.count_naked_singles);
     debug!("#unique_in_region {}", self.stats.count_unique_in_region);
     debug!("#naked_pairs {}", self.stats.count_naked_pairs);
     debug!("#naked_triples {}", self.stats.count_naked_triples);
+    debug!("#intersection_removal {}", self.stats.count_intersection_removal);
   }
 
 }
@@ -354,7 +416,11 @@ impl fmt::Debug for State<'_> {
         for c in 0..9 {
           let a = r * 9 + c;
           let cx = c * 6 + 1;
-          if self.solution[a] != 0 { strrep[ry][cx] = char::from_u32(self.solution[a] + 48).unwrap(); }
+          if self.solution[a] != 0 {
+            strrep[ry + 1][cx + 2] = char::from_u32(self.solution[a] + 48).unwrap();
+            strrep[ry + 1][cx + 1] = '[';
+            strrep[ry + 1][cx + 3] = ']';
+          }
           if self.candidates[a] & 1 << 0 != 0 { strrep[ry + 0][cx + 2] = '1'; }
           if self.candidates[a] & 1 << 1 != 0 { strrep[ry + 0][cx + 3] = '2'; }
           if self.candidates[a] & 1 << 2 != 0 { strrep[ry + 0][cx + 4] = '3'; }
@@ -370,7 +436,9 @@ impl fmt::Debug for State<'_> {
         .iter()
         .map(|q| q.iter().collect::<String>())
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+        .replace('[', "\x1b[44;1m ")
+        .replace(']', " \x1b[0m");
       writeln!(f, "\n{}", str)
     }
 
@@ -384,6 +452,7 @@ pub struct Solver {
   name: String, // TODO: Remove the name field
   regions: Vec<Region>,
   regions_for: [Vec<Region>; 81],
+  region_intersections: Vec<(Region, Region, u128)>,
   givens: Vec<Given>,
   cages: Vec<Cage>,
 }
@@ -436,25 +505,25 @@ impl SolverBuilder {
     self
   }
 
-  pub fn region(&mut self, cells: Vec<u32>) -> &mut Self {
+  pub fn region(&mut self, name: String, cells: Vec<u32>) -> &mut Self {
     let mut cells_bitset = 0u128;
     for cell in 0..81 {
       if cells.contains(&cell) {
         cells_bitset |= 1 << cell;
       }
     }
-    self.regions.push(Region { cells_bitset, cells });
+    self.regions.push(Region { name: Some(name), cells_bitset, cells });
     self
   }
 
-  pub fn region_bitset(&mut self, cells_bitset: u128) -> &mut Self {
+  pub fn region_bitset(&mut self, name: String, cells_bitset: u128) -> &mut Self {
     let mut cells: Vec<u32> = Vec::new();
     for cell in 0..81 {
       if cells_bitset & 1 << cell != 0 {
         cells.push(cell);
       }
     }
-    self.regions.push(Region { cells_bitset, cells });
+    self.regions.push(Region { name: Some(name), cells_bitset, cells });
     self
   }
 
@@ -481,41 +550,43 @@ impl SolverBuilder {
   }
 
   pub fn add_row_regions(&mut self) -> &mut Self {
+    let rowname = String::from("Row ");
     let mut row = decode_to_bits!("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9");
-    for _ in 0..9 {
-      self.region_bitset(row);
+    for r in 1..10 {
+      let rownr = r.to_string();
+      self.region_bitset(format!("{rowname}{rownr}"), row);
       row = row << 9;
     }
     self
   }
 
   pub fn add_column_regions(&mut self) -> &mut Self {
+    let colname = String::from("Column ");
     let mut col = decode_to_bits!("A1", "B1", "C1", "D1", "E1", "F1", "G1", "H1", "I1");
-    for _ in 0..9 {
-      self.region_bitset(col);
+    for c in 1..10 {
+      let colnr = c.to_string();
+      self.region_bitset(format!("{colname}{colnr}"), col);
       col = col << 1;
     }
     self
   }
 
   pub fn add_box_regions(&mut self) -> &mut Self {
-    self.region_bitset(decode_to_bits!("A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "C3"));
-    self.region_bitset(decode_to_bits!("D1", "D2", "D3", "E1", "E2", "E3", "F1", "F2", "F3"));
-    self.region_bitset(decode_to_bits!("G1", "G2", "G3", "H1", "H2", "H3", "I1", "I2", "I3"));
-    self.region_bitset(decode_to_bits!("A4", "A5", "A6", "B4", "B5", "B6", "C4", "C5", "C6"));
-    self.region_bitset(decode_to_bits!("D4", "D5", "D6", "E4", "E5", "E6", "F4", "F5", "F6"));
-    self.region_bitset(decode_to_bits!("G4", "G5", "G6", "H4", "H5", "H6", "I4", "I5", "I6"));
-    self.region_bitset(decode_to_bits!("A7", "A8", "A9", "B7", "B8", "B9", "C7", "C8", "C9"));
-    self.region_bitset(decode_to_bits!("D7", "D8", "D9", "E7", "E8", "E9", "F7", "F8", "F9"));
-    self.region_bitset(decode_to_bits!("G7", "G8", "G9", "H7", "H8", "H9", "I7", "I8", "I9"));
-    self
+    self.region_bitset(String::from("Box 1"), decode_to_bits!("A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "C3"))
+      .region_bitset(String::from("Box 2"), decode_to_bits!("D1", "D2", "D3", "E1", "E2", "E3", "F1", "F2", "F3"))
+      .region_bitset(String::from("Box 3"), decode_to_bits!("G1", "G2", "G3", "H1", "H2", "H3", "I1", "I2", "I3"))
+      .region_bitset(String::from("Box 4"), decode_to_bits!("A4", "A5", "A6", "B4", "B5", "B6", "C4", "C5", "C6"))
+      .region_bitset(String::from("Box 5"), decode_to_bits!("D4", "D5", "D6", "E4", "E5", "E6", "F4", "F5", "F6"))
+      .region_bitset(String::from("Box 6"), decode_to_bits!("G4", "G5", "G6", "H4", "H5", "H6", "I4", "I5", "I6"))
+      .region_bitset(String::from("Box 7"), decode_to_bits!("A7", "A8", "A9", "B7", "B8", "B9", "C7", "C8", "C9"))
+      .region_bitset(String::from("Box 8"), decode_to_bits!("D7", "D8", "D9", "E7", "E8", "E9", "F7", "F8", "F9"))
+      .region_bitset(String::from("Box 9"), decode_to_bits!("G7", "G8", "G9", "H7", "H8", "H9", "I7", "I8", "I9"))
   }
 
   pub fn add_regular_regions(&mut self) -> &mut Self {
-    self.add_row_regions();
-    self.add_column_regions();
-    self.add_box_regions();
-    self
+    self.add_row_regions()
+      .add_column_regions()
+      .add_box_regions()
   }
 
   pub fn build(&mut self) -> Solver {
@@ -527,10 +598,21 @@ impl SolverBuilder {
         }
       }
     }
+    let mut region_intersections = Vec::new();
+    for region1 in &self.regions {
+      for region2 in &self.regions {
+        if region1.cells_bitset >= region2.cells_bitset { continue; }
+        let intersection = region1.cells_bitset & region2.cells_bitset;
+        if intersection != 0 {
+          region_intersections.push((region1.clone(), region2.clone(), intersection));
+        }
+      }
+    }
     Solver {
       name: self.name.clone(),
       regions: self.regions.clone(),
       regions_for,
+      region_intersections,
       givens: self.givens.clone(),
       cages: self.cages.clone(),
     }
